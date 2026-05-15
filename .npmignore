@@ -1,0 +1,5 @@
+# Ignore everything except the main script and README
+*
+!fakegps
+!README.md
+!package.json
