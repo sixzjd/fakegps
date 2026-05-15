@@ -44,7 +44,7 @@ brew install fakegps
 pip3 install pymobiledevice3
 
 # 下载本项目
-git clone https://github.com/sixzjd/fakegps.git
+git clone https://github.com/sixzjd/fakeGPS-for-iPhone.git
 cd fakegps
 chmod +x fakegps
 
