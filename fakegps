@@ -26,13 +26,25 @@ check_tunneld() {
 # 完整版（自定义地点 + 坐标转换）
 
 PM="python3 -m pymobiledevice3"
+
+# Ensure Ctrl-C (SIGINT) restores real location on device without exiting interactive shell
+if [ -z "$FAKEGPS_TRAP_INSTALLED" ]; then
+    export FAKEGPS_TRAP_INSTALLED=1
+
+    cleanup_and_restore() {
+        # Kill pymobiledevice3 'set' subprocess (works for both main script and child).
+        # Do NOT use FAKEGPS_CHILD_PID — the child inherits it as its own PID,
+        # so kill -KILL $FAKEGPS_CHILD_PID would self-terminate before reaching clear.
+        pkill -f "pymobiledevice3 developer dvt simulate-location set" 2>/dev/null || true
+        # Restore real location synchronously so it completes before returning
+        $PM developer dvt simulate-location clear >/dev/null 2>&1 || true
+    }
+
+    trap 'cleanup_and_restore' INT TERM
+fi
 CONF="$HOME/.fakegps_places"
 
 # Auto-confirm support (env AUTO_CONFIRM=1 or --yes)
-AUTO_CONFIRM=0
-for a in "$@"; do case "$a" in --yes|-y) AUTO_CONFIRM=1; shift;; esac; done
-
-# Auto-confirm: set via --yes or env AUTO_CONFIRM=1
 AUTO_CONFIRM=0
 for a in "$@"; do case "$a" in --yes|-y) AUTO_CONFIRM=1; shift;; esac; done
 
@@ -42,12 +54,10 @@ load_custom() {
 }
 
 list_devices() {
-    python3 -c "
-import subprocess, json
-r = subprocess.run(['python3', '-m', 'pymobiledevice3', 'usbmux', 'list'],
-                   capture_output=True, text=True)
+    python3 -m pymobiledevice3 usbmux list 2>/dev/null | python3 -c "
+import sys, json
+raw = sys.stdin.read()
 try:
-    raw = r.stdout
     if 'warnings.warn' in raw:
         lines = [l for l in raw.split('\n') if l.strip().startswith('[') or l.strip().startswith('{') or l.strip().startswith(']')]
         raw = '\n'.join(lines)
@@ -55,7 +65,7 @@ try:
         print(d.get('Identifier','') + '|' + d.get('DeviceName','') + '|' + d.get('ProductVersion',''))
 except:
     pass
-" 2>/dev/null
+"
 }
 
 get_coords() {
@@ -539,13 +549,20 @@ __FAKEGPS_MAP_HTML__
                 fi
                 # 去掉 / 前缀
                 cmd="${cmd#/}"
-
-                # 去掉 / 前缀
-                cmd="${cmd#/}"
                 case "$cmd" in
                     exit|quit|q)
                         echo "已退出"
                         break
+                        ;;
+                    clear)
+                        echo "✅ 恢复真实定位"
+                        $PM developer dvt simulate-location clear
+                        ;;
+                    list)
+                        echo "📱 已连接设备:"
+                        list_devices | while IFS='|' read id name ver; do
+                            echo "  $name (iOS $ver)"
+                        done
                         ;;
                     commands)
                         echo "内置地点: tiananmen guomao wangjing shanghai shenzhen paris newyork tokyo london"
@@ -557,7 +574,17 @@ __FAKEGPS_MAP_HTML__
                     "")
                         ;;
                     *)
-                        "$SCRIPT_DIR/fakegps" $cmd $args
+                        (
+                            "$SCRIPT_DIR/fakegps" $cmd $args
+                        ) &
+                        FAKEGPS_CHILD_PID=$!
+                        # Background timeout: if child hangs >3s, force-kill it.
+                        (sleep 3 && kill -KILL "$FAKEGPS_CHILD_PID" 2>/dev/null) &
+                        KILLER_PID=$!
+                        wait $FAKEGPS_CHILD_PID 2>/dev/null
+                        kill $KILLER_PID 2>/dev/null
+                        wait $KILLER_PID 2>/dev/null
+                        FAKEGPS_CHILD_PID=
                         ;;
                 esac
             done
